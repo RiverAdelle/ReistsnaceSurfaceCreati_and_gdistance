@@ -1,0 +1,798 @@
+---
+title: "Resistance Mapping"
+author: "River Watson"
+date: '2022-10-06'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(raster)
+library(rgdal)          
+library(RColorBrewer) 
+library(rasterVis)    
+library(ggplot2)      
+library(colorspace)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(sf)
+library(gdistance)
+library(riverdist)
+library(gstat)
+library(sp)
+library(scales)
+library(magrittr)
+library(automap)
+library(ResistanceGA)
+library(FedData)
+library(tidyverse)
+library(terra)
+library(ecodist)
+library(Matrix)
+#rm(list = ls())
+```
+
+```{r rasters}
+p_new<-"+proj=utm +zone=17 +ellps=GRS80 +datum=NAD83 +units=m +no_defs"
+nlcdClip<- raster("All_Rasters/nlcd_2019_land_cover_Clip.tif")
+nlcdClip
+nlcdClip<-projectRaster(nlcdClip,crs = p_new, method = "ngb")
+nlcdClip
+#writeRaster(nlcdClip, "UTMRasters/nlcdclip.tif", format="GTiff", overwrite=TRUE)
+plot(nlcdClip)
+
+Cond<- raster("All_Rasters/RawCond_Masked.tif")
+Cond<-projectRaster(Cond,crs = p_new, method = "ngb")
+#writeRaster(Cond, "UTMRasters/Cond.tif", format="GTiff", overwrite=TRUE)
+plot(Cond)
+
+Culv<- raster("All_Rasters/CulvUTM.tif")
+Culv<-projectRaster(Culv,crs = p_new, method = "ngb")
+#writeRaster(Culv, "UTMRasters/Culv.tif", format="GTiff", overwrite=TRUE)
+plot(Culv)
+
+Flowline<- raster("All_Rasters/FlowlineRaster.tif")
+Flowline<-projectRaster(Flowline,crs = p_new, method = "ngb")
+#writeRaster(Flowline, "UTMRasters/Flowline.tif", format="GTiff", overwrite=TRUE)
+plot(Flowline)
+
+StreamSize<- raster("All_Rasters/fac_Clip.tif")
+StreamSize<-projectRaster(StreamSize,crs = p_new, method = "ngb")
+#writeRaster(StreamSize, "UTMRasters/StreamSizefac.tif", format="GTiff", overwrite=TRUE)
+plot(StreamSize)
+
+FlowDirection<- raster("All_Rasters/fdr_Clip.tif")
+FlowDirection<-projectRaster(FlowDirection,crs = p_new, method = "ngb")
+#writeRaster(FlowDirection, "UTMRasters/FlowDirection.tif", format="GTiff", overwrite=TRUE)
+plot(FlowDirection)
+
+Slope<-raster("RGAfiles/Slope_Mask2_Clip.tif")
+crs(Slope)
+#Slope<-projectRaster(Slope,crs = p_new, method = "ngb")
+#writeRaster(Slope, "UTMRasters/Slope.tif", format="GTiff", overwrite=TRUE)
+plot(Slope)
+
+Elev<-raster("RGAfiles/Elev_Mask2_Clip.tif")
+crs(Elev)
+#Elev<-projectRaster(Elev,crs = p_new, method = "ngb")
+#writeRaster(Elev, "UTMRasters/Elev.tif", format="GTiff", overwrite=TRUE)
+plot(Elev)
+
+RawNLCD<-raster("All_Rasters/RawNLCD_Masked.tif")
+plot(RawNLCD)
+m3 <-c(0,25,25,25,50,50,50,89,75,90,100,100)
+rclmatrix3<- matrix(m3, ncol = 3, byrow = TRUE)
+NLCD2<-reclassify(RawNLCD, rcl = rclmatrix3)
+NLCD<-raster::crop(NLCD2,Cond)
+plot(NLCD2)
+RawAOP<-raster("All_Rasters/AOPScaledFix_Clip.tif")
+ScalesElev<-raster("All_Rasters/Elev_Rescaled_Conduct.tif")
+ScaledSS<-raster("All_Rasters/SS_Rescaled_Conduct.tif")
+ScaledSlope<-raster("All_Rasters/Slope_Rescaled_Conduct.tif")
+ScaledCond<-raster("All_Rasters/Cond_Rescaled_Conduct.tif")
+m3 <-c(-1,1,1)
+rclmatrix3<- matrix(m3, ncol = 3, byrow = TRUE)
+ScaledCond<-reclassify(ScaledCond, rcl = rclmatrix3)
+plot(ScaledCond)
+InvSS<-raster("SS.asc")
+plot(InvSS)
+Cond25<-raster("Cond25.tif")
+plot(Cond25)
+```
+
+data = read.csv("CulvertsSARPRating.csv")
+cord.dec = SpatialPoints(cbind(data$Long, -data$Lat), proj4string = CRS("+proj=longlat"))
+
+plot(cord.dec)
+# Setting existing coordinate as lat-long system
+cord.dec = SpatialPoints(cbind(data$long, -data$lat), proj4string = CRS("+proj=longlat"))
+
+# Transforming coordinate to UTM using EPSG=26917 for WGS=84, UTM Zone=17N,
+
+cord.UTM <- spTransform(cord.dec, CRS("+init=epsg:26917"))
+plot(cord.UTM$coords-10)
+
+```{r stream 30m buffer}
+p_new<-"+proj=utm +zone=17 +ellps=GRS80 +datum=NAD83 +units=m +no_defs"
+Flowlineshp<-st_read("All_Rasters/NHDFlowline_SF.shp")
+Flowlineshp <- st_transform(Flowlineshp, crs=p_new)
+Flowlineshp<-st_zm(Flowlineshp)
+streams_buff <- st_buffer(Flowlineshp, dist = 60)
+ggplot() +
+  geom_sf(data = streams_buff, color = "blue")
+streams_buff <- st_union(streams_buff)
+streams_buff <- st_sf(streams_buff)
+polygonrst<-raster("All_Rasters/SFBoundingBox.tif")
+polygon<-st_read("All_Rasters/SFBoundingBox.shp")
+polygon <- st_transform(polygon, crs=p_new)
+sf_use_s2(FALSE)
+streams_buff <- st_intersection(streams_buff, polygon)
+streams_buff <- mask(polygonrst, streams_buff)
+plot(streams_buff)
+#writeRaster(streams_buff, "UTMRasters/FlowlineBuffer.tif", format="GTiff", overwrite=TRUE)
+```
+
+
+```{r reclass NLCD}
+#reclassify data to forested or not
+m2 <-c(10,40,0,44,96,0,40,43,100) #from 1 to 40 is zero, from 41 to 43 is one (forested), from 44 to 95 is zero
+#cuts out everything except forested 41 42 and 43
+rclmatrix2<- matrix(m2, ncol=3, byrow = TRUE)
+nlcdreclass<-reclassify(nlcdClip, rclmatrix2)
+plot(nlcdreclass)
+nlcdClip
+nlcdreclass
+#writeRaster(nlcdfocal, "UTMRasters/nlcdfocal.tif", format="GTiff", overwrite=TRUE)
+#focal analysis-moving window analysisto find percent forest cover
+nlcdfocal<- focal(nlcdreclass,fun = function(x){sum(x)/9}, w = matrix(1,3,3))
+plot(nlcdfocal)
+#writeRaster(nlcdfocal, "UTMRasters/nlcdfocal.tif", format="GTiff", overwrite=TRUE)
+
+#second moving window analysis looking at more cells surrounding the stream cells- this helps, but not enough to be a solution
+nlcdfocal25<- focal(nlcdreclass,fun = function(x){sum(x)/25}, w = matrix(1,5,5))
+plot(nlcdfocal25)
+?focal
+#writeRaster(nlcdfocal25, "UTMRasters/nlcdfocal25.tif", format="GTiff", overwrite=TRUE)
+```
+
+
+```{r reclassify everything else, put in UTMs}
+p_new<-"+proj=utm +zone=17 +ellps=GRS80 +datum=NAD83 +units=m +no_defs"
+Culv<-raster("CulvertsSARPRatingUTM2_Point81.tif")
+##Culvert Ratings
+Culv
+Culvfocal<- focal(Culv,w = matrix(1,3,3),fun = max,na.rm=TRUE)
+plot(Culvfocal)
+Culvfocal
+writeRaster(Culvfocal, "Culvfocal3.tif", format="GTiff", overwrite=TRUE)
+CuFc<-raster("All_Rasters/Culvfocal3.tif")
+CuFc
+plot(CuFc)
+m3 <-c(NA,NA,100,0,1,90,1,2,66,2,3,33,3,4,1,4,5,100) #1 is mod 2 is minor 3 is severe 4 is insig
+rclmatrix3<- matrix(m3, ncol = 3, byrow = TRUE)
+culvreclass<-reclassify(CuFc, rcl = rclmatrix3)
+plot(culvreclass)
+culvreclass
+writeRaster(culvreclass, "AOP3reclass100s.tif", format="GTiff", overwrite=TRUE)
+
+
+
+##Conductivity Points-not krigged
+Cond
+Condfocal<- focal(Cond,w = matrix(1,5,5),fun = max, na.rm=TRUE)
+plot(Condfocal)
+#writeRaster(Condfocal, "Condfocal25.tif", format="GTiff", overwrite=TRUE)
+CF<-raster("Condfocal25.tif")
+CF
+m4 <-c(NA,NA,100,37,260,100,260,450,25,450,686,1) 
+rclmatrix4<- matrix(m4, ncol = 3, byrow = TRUE)
+condreclass<-reclassify(CF, rcl = rclmatrix4)
+plot(condreclass)
+condreclass
+#writeRaster(condreclass, "cond25reclass100s.tif", format="GTiff", overwrite=TRUE)
+
+##Stream Size- reclass based on natural jenks breaks in arcmap
+plot(StreamSize)
+StreamSize<-projectRaster(StreamSize,crs = p_new)
+SSfocal<- focal(StreamSize,w = matrix(1,9,9),fun = max)
+plot(SSfocal)
+#writeRaster(SSfocal, "UTMRasters/SSfocal.tif", format="GTiff", overwrite=TRUE)
+SSfocal<-raster("UTMRasters/SSfocal.tif")
+SSfocal
+m5 <-c(-Inf,110750,100,110750,300000,75,300000,563145,50,563145,1878352,1) 
+rclmatrix5<- matrix(m5, ncol = 3, byrow = TRUE)
+StreamSizereclass<-reclassify(SSfocal,rcl=rclmatrix5)
+plot(StreamSizereclass)
+#values(StreamSizereclass)[values(StreamSizereclass) < 1] = NA
+StreamSizereclass
+#writeRaster(StreamSizereclass, "UTMRasters/StreamSizereclass100s.tif", format="GTiff", overwrite=TRUE)
+
+#Slope
+Slope
+m7 <-c(-1,24,100,24,53,85) 
+rclmatrix7<- matrix(m7, ncol = 3, byrow = TRUE)
+Slopereclass<-reclassify(Slope, rcl = rclmatrix7)
+plot(Slopereclass)
+Slopereclass
+#raster::writeRaster(Slopereclass, "UTMRasters/Slopereclass.tif", format="GTiff", overwrite=TRUE)
+
+#Elevation
+Elev
+#m8 <-c(21061,35845,100,35845,62489,85) 
+m8 <-c(21060,25000,100,25000,49035,80) 
+rclmatrix8<- matrix(m8, ncol = 3, byrow = TRUE)
+Elevreclass<-reclassify(Elev, rcl = rclmatrix8)
+plot(Elevreclass)
+Elevreclass
+#raster::writeRaster(Elevreclass, "UTMRasters/Elevreclass.tif", format="GTiff", overwrite=TRUE)
+
+
+#NLCD
+nlcdfocal25
+m8 <-c(-1,50,60,50,80,80,80,100,100) 
+rclmatrix8<- matrix(m8, ncol = 3, byrow = TRUE)
+NLCDreclass<-reclassify(nlcdfocal25, rcl = rclmatrix8)
+plot(NLCDreclass)
+NLCDreclass
+#raster::writeRaster(NLCDreclass, "UTMRasters/NLCDreclass.tif", format="GTiff", overwrite=TRUE)
+
+
+#getting rid of zeros in rasters
+Cu<-raster("RawAOP_Masked.tif")
+plot(Cu)
+m3<-c(99,101,1)
+rclmatrix3<- matrix(m3, ncol = 3, byrow = TRUE)
+culvreclass<-reclassify(Cu, rcl = rclmatrix3)
+plot(culvreclass)
+culvreclass
+writeRaster(culvreclass, "RawAOP_Masked0to1.tif", format="GTiff", overwrite=TRUE)
+```
+
+
+```{r distance}
+library(riverdist)
+#getting nhd through R https://ryanpeek.org/2017-11-05-mapping-with-sf-part-2/
+#possible tutorial https://ryanpeek.org/2017-11-21-mapping-with-sf-part-3/
+
+#used these three:
+#demo https://github.com/FloodHydrology/riverdist_demo
+#https://github.com/mbtyers/riverdist
+#https://cran.r-project.org/web/packages/riverdist/vignettes/riverdist_vignette.html
+p <- '+proj=longlat +datum=WGS84 +no_defs'
+sitepoints <- read.csv("Sites_noLD.csv") %>% 
+  st_as_sf(coords = c("Long", "Lat"), crs= p )
+SF<- st_read("All_Rasters/SFDissolve.shp")
+#Create a temp folder to write network folder too
+temp_file<-tempdir()
+dir.create(temp_file)
+#reproj to UTMs
+p_new<-"+proj=utm ep+zone=17 +ellps=GRS80 +datum=NAD83 +units=m +no_defs"
+SF<-st_transform(SF, crs=p_new)
+sitepoints<-st_transform(sitepoints, crs=p_new)
+#prep stream data
+SF <- SF %>% 
+  #remove z information (to make it a 'linear' feature)
+  st_zm() %>% 
+  #Add ID data
+  mutate(
+    uid = seq(1, nrow(.)),
+    type = 'river'
+  )
+#export streams to temp file
+st_write(SF, paste0(temp_file,"\\SF.shp"), delete_dsn = T)
+
+#Create flownet
+flow_net <- line2network(path=temp_file, layer="SF", tolerance = 1)
+
+#save flow network 
+save(flow_net, file = paste0(temp_file, "\\riv.rda"))
+
+#prep sites data
+pnts<-sitepoints %>% 
+  #Define coordinates
+  mutate(
+    x = st_coordinates(.)[,1],
+    y = st_coordinates(.)[,2],
+  ) %>% 
+  #Add site name
+  mutate(site_name = 'Site') %>% 
+  st_drop_geometry()
+
+#Snap points to flow network
+snap<-xy2segvert(x=pnts$x, y=pnts$y, rivers=flow_net)
+
+#Estimate distances ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Define river distance between points!
+output<-riverdistancemat(
+  seg = snap$seg, 
+  vert = snap$vert, 
+  rivers = flow_net)
+library(MASS)
+#as.data.frame(output)
+#write.csv(output, file = "riverdist.csv")
+```
+
+
+```{r trying gdistance}
+#load in mask files of resistance layers
+#Culv<-raster("RGAfiles/Culv_Mask2_Clip.tif")
+#plot(Culv)
+#Culv
+Cond<-raster("RGAfiles/Cond_Mask2_Clip.tif")
+plot(Cond)
+Cond
+StreamSize<-raster("RGAfiles/SS_Mask2_Clip.tif")
+plot(StreamSize)
+StreamSize
+#NLCD<-raster("RGAfiles/NLCD_Mask2_Clip.tif")
+#plot(NLCD)
+#NLCD
+Slope<-raster("UTMRasters/Slopereclass.tif")
+plot(Slope)
+Slope
+Elev<-raster("UTMRasters/Elevreclass.tif")
+plot(Elev)
+Elev
+#load in points matched up to each mask
+samples<-read_csv("RGAfiles/SitesUTM_noLD.csv")
+samples<-SpatialPoints(samples[,c(2,3)])
+samples
+#make transition objects which is what gdistance uses
+
+Condt<- transition(Cond, transitionFunction=mean, directions=8)
+StreamSizet<- transition(StreamSize, transitionFunction=mean, directions=8)
+NLCDt<- transition(NLCD, transitionFunction=mean, directions=8)
+Slopet<- transition(Slope, transitionFunction=mean, directions=8)
+Elevt<- transition(Elev, transitionFunction=mean, directions=8)
+
+RawNLCDt<-transition(RawNLCD, transitionFunction=mean, directions=8)
+RawAOPt<-transition(RawAOP, transitionFunction=mean, directions=8)
+ScaledSlopet<-transition(ScaledSlope, transitionFunction=mean, directions=8)
+ScaledSSt<-transition(ScaledSS, transitionFunction=mean, directions=8)
+ScaledElevt<-transition(ScalesElev, transitionFunction=mean, directions=8)
+ScaledCondt<-transition(ScaledCond, transitionFunction=mean, directions=8)
+NLCD2t<-transition(NLCD2, transitionFunction=mean, directions=8)
+InvSSt<-transition(InvSS, transitionFunction=mean, directions=8)
+Cond25t<-transition(Cond25, transitionFunction=mean, directions=8)
+#run commute distance
+
+CondDistance<-commuteDistance(Condt,samples)
+SSDistance<-commuteDistance(StreamSizet,samples)
+NLCDDistance<-commuteDistance(NLCDt,samples)
+SlopeDistance<-commuteDistance(Slopet,samples)
+ElevDistance<-commuteDistance(Elevt,samples)
+
+RawNLCDDistance<-commuteDistance(RawNLCDt,samples)
+RawAOPDistance<-commuteDistance(RawAOPt,samples)
+ScaledSlopeDistance<-commuteDistance(ScaledSlopet,samples)
+ScaledSSDistance<-commuteDistance(ScaledSSt,samples)
+ScaledElevDistance<-commuteDistance(ScaledElevt,samples)
+ScaledCondDistance<-commuteDistance(ScaledCondt,samples)
+NLCD2Distance<-commuteDistance(NLCD2t,samples)
+InvSSDistance<-commuteDistance(InvSSt,samples)
+Cond25Distance<-commuteDistance(Cond25t,samples)
+
+#export outputs
+#CulvDistancec<-as.matrix(CulvDistance)
+#CulvDistancec<-as.data.frame(CulvDistancec)
+#write.csv(CulvDistancec, file = "CulvDistance.csv")
+
+#CondDistancec<-as.matrix(CondDistance)
+#CondDistancec<-as.data.frame(CondDistancec)
+#write.csv(CondDistancec, file = "CondDistance.csv")
+
+#SSDistancec<-as.matrix(SSDistance)
+#SSDistancec<-as.data.frame(SSDistancec)
+#write.csv(SSDistancec, file = "SSDistance.csv")
+
+#NLCDDistancec<-as.matrix(NLCDDistance)
+#NLCDDistancec<-as.data.frame(NLCDDistancec)
+#write.csv(NLCDDistancec, file = "NLCDDistance.csv")
+
+#SlopeDistancec<-as.matrix(SlopeDistance)
+#SlopeDistancec<-as.data.frame(SlopeDistancec)
+#write.csv(SlopeDistancec, file = "SlopeDistance.csv")
+
+#ElevDistancec<-as.matrix(ElevDistance)
+#ElevDistancec<-as.data.frame(ElevDistancec)
+#write.csv(ElevDistancec, file = "ElevDistance.csv")
+```
+
+```{r gdistance combined}
+#load in mask files of resistance layers
+#Culv<-raster("RGAfiles/Culv_Mask2_Clip.tif")
+#plot(Culv)
+Cond<-raster("RGAfiles/Cond_Mask2_Clip.tif")
+plot(Cond)
+StreamSize<-raster("RGAfiles/SS_Mask2_Clip.tif")
+plot(StreamSize)
+#NLCD<-raster("RGAfiles/NLCD_Mask2_Clip.tif")
+#plot(NLCD)
+Slope<-raster("UTMRasters/Slopereclass.tif")
+plot(Slope)
+Elev<-raster("UTMRasters/Elevreclass.tif")
+plot(Elev)
+#make raster brick-cant use raster stack in gdistacne
+r.brick <- brick(RawAOP,Cond,NLCD,StreamSize,Slope,Elev)
+#read in samples
+samples1<-read_csv("RGAfiles/SitesUTM_noLD.csv")
+samples<-SpatialPoints(samples1[,c(2,3)])
+#make transition object which is what gdistance uses
+#error-method mahal isnt working, listed as a bug on guthub
+cost<-(RawAOP + Cond + NLCD + StreamSize + Slope + Elev)
+cost
+plot(cost)
+#rbrickt <- transition(r.brick, transitionFunction="mahal", directions=8)
+tr.cost1 <- gdistance::transition(cost, transitionFunction=mean, directions=8) 
+tr.cost1
+par(mar=c(2,2,1,1))
+raster::plot(raster::raster(tr.cost1))
+#raster::writeRaster(cost, "RGAfiles/CombinedConductanceRaster.tif", format="GTiff", overwrite=TRUE)
+tr.cost1 <- gdistance::geoCorrection(tr.cost1,type = "c",multpl=FALSE)
+
+allDistance<-commuteDistance(tr.cost1,samples)
+#AllDistancec<-as.matrix(allDistance)
+#AllDistancec<-as.data.frame(AllDistancec)
+#write.csv(AllDistancec, file = "CombinedDistance.csv")
+
+#least cost paths
+lcpDistance <- gdistance::costDistance(tr.cost1,samples)
+
+#compare the two
+#dist_df <- data.frame("lcpDistance"=as.numeric(lcpDistance),
+ #                     "allDistance"=as.numeric(allDistance))
+#correlation  <- cor(dist_df$lcpDistance, dist_df$allDistance, method = "spearman")
+#correlation #=0.9992833
+
+#making combos of resistance layers
+CuCoNLSS<-(RawAOP + Cond + NLCD + StreamSize)
+CuCoNLSS <- gdistance::transition(CuCoNLSS, transitionFunction=mean, directions=8) 
+CuCoNLSS <- gdistance::geoCorrection(CuCoNLSS,type = "c",multpl=FALSE)
+CuCoNLSSDistance<-commuteDistance(CuCoNLSS,samples)
+
+SlEl<-(Slope + Elev)
+SlEl <- gdistance::transition(SlEl, transitionFunction=mean, directions=8) 
+SlEl <- gdistance::geoCorrection(SlEl,type = "c",multpl=FALSE)
+SlElDistance<-commuteDistance(SlEl,samples)
+
+SlElNL<-(Slope + Elev+NLCD)
+SlElNL <- gdistance::transition(SlElNL, transitionFunction=mean, directions=8) 
+SlElNL <- gdistance::geoCorrection(SlElNL,type = "c",multpl=FALSE)
+SlElNLDistance<-commuteDistance(SlElNL,samples)
+
+CuCo<-(RawAOP + Cond)
+CuCo <- gdistance::transition(CuCo, transitionFunction=mean, directions=8) 
+CuCo <- gdistance::geoCorrection(CuCo,type = "c",multpl=FALSE)
+CuCoDistance<-commuteDistance(CuCo,samples)
+
+CoNL<-(Cond + NLCD2)
+plot(CoNL)
+CoNL <- gdistance::transition(CoNL, transitionFunction=mean, directions=8) 
+CoNL <- gdistance::geoCorrection(CoNL,type = "c",multpl=FALSE)
+CoNLDistance<-commuteDistance(CoNL,samples)
+
+CuNL<-(RawAOP + NLCD)
+CuNL <- gdistance::transition(CuNL, transitionFunction=mean, directions=8) 
+CuNL <- gdistance::geoCorrection(CuNL,type = "c",multpl=FALSE)
+CuNLDistance<-commuteDistance(CuNL,samples)
+
+noSS<-(RawAOP + Cond + NLCD + Slope + Elev)
+noSS <- gdistance::transition(noSS, transitionFunction=mean, directions=8) 
+noSS <- gdistance::geoCorrection(noSS,type = "c",multpl=FALSE)
+noSSDistance<-commuteDistance(noSS,samples)
+```
+
+```{r pearsons correlation tests}
+#read in all the data
+library(hierfstat)
+library(adegenet)
+CulvDistance<-read.csv("CulvDistance.csv")
+CulvDistance<-CulvDistance[,2:13]
+CulvDistance<-lower(CulvDistance)
+CondDistance<-read.csv("CondDistance.csv")
+CondDistance<-CondDistance[,2:13]
+CondDistance<-lower(CondDistance)
+NLCDDistance<-read.csv("NLCDDistance.csv")
+NLCDDistance<-NLCDDistance[,2:13]
+NLCDDistance<-lower(NLCDDistance)
+SSDistance<-read.csv("SSDistance.csv")
+SSDistance<-SSDistance[,2:13]
+SSDistance<-lower(SSDistance)
+SlopeDistance<-read.csv("SlopeDistance.csv")
+SlopeDistance<-SlopeDistance[,2:13]
+SlopeDistance<-lower(SlopeDistance)
+ElevDistance<-read.csv("ElevDistance.csv")
+ElevDistance<-ElevDistance[,2:13]
+ElevDistance<-lower(ElevDistance)
+#mlpe with all resitance distances
+allDistance<-lower(allDistance)
+Data <- read.genepop("KAD_Watson_GenepopFile_12popNo519.gen") 
+Datahier <- genind2hierfstat(Data)
+wcpw <-pairwise.WCfst(Datahier, diploid = TRUE)
+wcpw<-lower(wcpw)
+output<-read.csv("riverdist.csv")#from riverdist
+output<-output[,2:13]
+riverdist<-lower(output)
+riverdist
+
+#riverdistances are currently in unlogtransformed meters instead of logtransformed km
+library(measurements)
+as.data.frame(output)
+outputkm <- measurements::conv_unit(output,"m","km")
+logkmrd<-log(outputkm)
+distlg<-as.matrix(logkmrd)
+distlg<-lower(outputkm)
+output<-as.matrix(output)
+output<-lower(output)
+cor.test(allDistance,riverdist)
+#positive correlation 0.3620896, p-value = 0.002813
+
+cor.test(SS_jlResistMatCopy,output)
+#	Pearson's product-moment correlation
+#data:  SS_jlResistMatCopy and output
+#t = 47.519, df = 142, p-value < 2.2e-16
+#alternative hypothesis: true correlation is not equal to 0
+#95 percent confidence interval:
+# 0.9584640 0.9783195
+#sample estimates:
+#      cor 
+#0.9699669 
+```
+
+
+```{r putting gdistance results into mlpe model from RGA}
+#run wc fst-make a vector
+library(hierfstat)
+library(adegenet)
+Data <- read.genepop("KAD_Watson_GenepopFile_12popNo519.gen")
+Datahier <- genind2hierfstat(Data)
+wcpw <-pairwise.WCfst(Datahier, diploid = TRUE)
+fst<-lower(wcpw)
+#log river distance
+output<-read.csv("riverdist.csv")#from riverdist
+output<-output[,2:13]
+riverdist<-lower(output)
+riverdist
+#combined resistance distance
+allDistance
+allDistance<-as.vector(allDistance)
+all<-MLPE.lmm(allDistance,fst)
+#Culv, Cond, NLCD, SS
+
+#run mple model from resistanceGA
+#This function will run the model and return lmer object
+#all 6 resistance layers
+dist<-MLPE.lmm(output,fst)
+summary(dist)
+library(MuMIn)
+r.squaredGLMM(dist)
+
+
+allDistance
+library(lme4)
+library(AICcmodavg)
+mods<-list(all,dist)
+aictab(mods)
+#now try 4, no slope or elevation
+four<-MLPE.lmm(CuCoNLSSDistance,fst)
+#just slope and elevation
+SE<-MLPE.lmm(SlElDistance,fst)
+#just culverts and conductivity
+CC<-MLPE.lmm(CuCoDistance,fst)
+#Cond and NLCD
+CoN<-MLPE.lmm(CoNLDistance,fst)
+#all minus SS
+NoSS<-MLPE.lmm(noSSDistance,fst)
+#Culv + NLCD
+CuNL<-MLPE.lmm(CuNLDistance,fst)
+#Slope + Elev + NLCD
+SlElNL<-MLPE.lmm(SlElNLDistance,fst)
+#all individually
+mCond<-MLPE.lmm(CondDistance,fst)
+summary(mCond)
+mNLCD<-MLPE.lmm(NLCDDistance,fst)
+summary(mNLCD)
+mSS<-MLPE.lmm(SSDistance,fst)
+summary(mSS)
+mSlope<-MLPE.lmm(SlopeDistance,fst)
+summary(mSlope)
+mElev<-MLPE.lmm(ElevDistance,fst)
+
+mRawNLCD<-MLPE.lmm(RawNLCDDistance,fst)
+mRawAOP<-MLPE.lmm(RawAOPDistance,fst)
+mScaledSlope<-MLPE.lmm(ScaledSlopeDistance,fst)
+mScaledElev<-MLPE.lmm(ScaledElevDistance,fst)
+mScaledSS<-MLPE.lmm(ScaledSSDistance,fst)
+mScaledCond<-MLPE.lmm(ScaledCondDistance,fst)
+mNLCD2<-MLPE.lmm(NLCD2Distance,fst)
+mInvSS<-MLPE.lmm(InvSSDistance,fst)
+mCond25<-MLPE.lmm(Cond25Distance,fst)
+
+
+library(AICcmodavg)
+model.list<-list(all,dist,mCond,mNLCD,mSS,mSlope,mElev,four,SE,CC,CoN,NoSS,CuNL,SlElNL,mRawNLCD,mRawAOP,mScaledSlope,mScaledElev,mScaledSS,mScaledCond,mNLCD2,mInvSS,mCond25)
+names<-c("all","dist","mCond","mNLCD","mSS","mSlope","mElev","four","SE","CC","CoN","NoSS","CuNL","SlElNL","mRawNLCD","mRawAOP","mScaledSlope","mScaledElev","mScaledSS","mScaledCond","mNLCD2","InvSS","mCond25")
+table<-aictab(model.list, modnames = names)
+
+plot(Cond25Distance,fst)
+r.squaredGLMM(SlElNL)
+
+#ls()
+#save.image(file='myEnvironment2.RData')
+#load('myEnvironment.RData')
+#write_xlsx(table,"ModelRanks_AIC.xlsx")
+
+
+#The code below does the EXACT SAME THING as MLPE.lmm, MLPE.lmm just does all of the work for you
+# Generate to-from object
+#  id <- To.From.ID(nrow(samples1))
+#  df1 <- data.frame(fst,
+#                  allDistance,
+#                   pop = id$pop1)
+#  mod1 <- mlpe_rga(formula = fst ~ allDistance + (1 | pop),
+#                   data = df1)
+#  summary(mod1)
+  
+#  df2 <- data.frame(fst,
+#                  riverdistance,
+#                   pop = id$pop1)
+#  mod2 <- mlpe_rga(formula = fst ~ riverdist + (1 | pop),
+#                   data = df2)
+#  summary(mod2)
+# AIC(mod1, mod2)
+```
+
+```{r all model combinations (36)}
+m1<-(RawAOP)
+m1 <- gdistance::transition(m1, transitionFunction=mean, directions=8)
+m1<-commuteDistance(m1,samples)
+m1<-MLPE.lmm(m1,fst)
+
+m2<-(RawAOP + Cond)
+m2 <- gdistance::transition(m2, transitionFunction=mean, directions=8)
+m2<-commuteDistance(m2,samples)
+m2<-MLPE.lmm(m2,fst)
+
+m3<-(RawAOP + Cond + NLCD)
+m3 <- gdistance::transition(m3, transitionFunction=mean, directions=8)
+m3<-commuteDistance(m3,samples)
+m3<-MLPE.lmm(m3,fst)
+
+m4<-(RawAOP + Cond + NLCD + StreamSize)
+m4 <- gdistance::transition(m4, transitionFunction=mean, directions=8)
+m4<-commuteDistance(m4,samples)
+m4<-MLPE.lmm(m4,fst)
+
+m5<-(RawAOP + Cond + NLCD + StreamSize + Slope)
+m5 <- gdistance::transition(m5, transitionFunction=mean, directions=8)
+m5<-commuteDistance(m5,samples)
+m5<-MLPE.lmm(m5,fst)
+
+m6<-(RawAOP + Cond + NLCD + StreamSize + Slope + Elev)
+m6 <- gdistance::transition(m6, transitionFunction=mean, directions=8)
+m6<-commuteDistance(m6,samples)
+m6<-MLPE.lmm(m6,fst)
+
+m7<-(Cond)
+m7 <- gdistance::transition(m7, transitionFunction=mean, directions=8)
+m7<-commuteDistance(m7,samples)
+m7<-MLPE.lmm(m7,fst)
+
+m8<-(NLCD + Cond)
+m8 <- gdistance::transition(m8, transitionFunction=mean, directions=8)
+m8<-commuteDistance(m8,samples)
+m8<-MLPE.lmm(m8,fst)
+
+m9<-(RawAOP + Cond + Slope)
+m9 <- gdistance::transition(m9, transitionFunction=mean, directions=8)
+m9<-commuteDistance(m9,samples)
+m9<-MLPE.lmm(m9,fst)
+
+m10<-(RawAOP + Cond + NLCD + Slope)
+m10 <- gdistance::transition(m10, transitionFunction=mean, directions=8)
+m10<-commuteDistance(m10,samples)
+m10<-MLPE.lmm(m10,fst)
+
+m11<-(RawAOP + Cond + NLCD + Elev + Slope)
+m11 <- gdistance::transition(m11, transitionFunction=mean, directions=8)
+m11<-commuteDistance(m11,samples)
+m11<-MLPE.lmm(m11,fst)
+
+m12<-(NLCD)
+m12 <- gdistance::transition(m12, transitionFunction=mean, directions=8)
+m12<-commuteDistance(m12,samples)
+m12<-MLPE.lmm(m12,fst)
+
+m13<-(NLCD + RawAOP)
+m13 <- gdistance::transition(m13, transitionFunction=mean, directions=8)
+m13<-commuteDistance(m13,samples)
+m13<-MLPE.lmm(m13,fst)
+
+m14<-(NLCD + Cond + Slope)
+m14 <- gdistance::transition(m14, transitionFunction=mean, directions=8)
+m14<-commuteDistance(m14,samples)
+m14<-MLPE.lmm(m14,fst)
+
+m15<-(NLCD + Cond + Elev + Slope)
+m15 <- gdistance::transition(m15, transitionFunction=mean, directions=8)
+m15<-commuteDistance(m15,samples)
+m15<-MLPE.lmm(m15,fst)
+
+m16<-(RawAOP + Cond + NLCD + Elev + StreamSize)
+m16 <- gdistance::transition(m16, transitionFunction=mean, directions=8)
+m16<-commuteDistance(m16,samples)
+m16<-MLPE.lmm(m16,fst)
+
+m17<-(StreamSize)
+m17 <- gdistance::transition(m17, transitionFunction=mean, directions=8)
+m17<-commuteDistance(m17,samples)
+m17<-MLPE.lmm(m17,fst)
+
+m18<-(StreamSize + RawAOP)
+m18 <- gdistance::transition(m18, transitionFunction=mean, directions=8)
+m18<-commuteDistance(m18,samples)
+m18<-MLPE.lmm(m18,fst)
+
+m19<-(StreamSize + Cond + Slope)
+m19 <- gdistance::transition(m19, transitionFunction=mean, directions=8)
+m19<-commuteDistance(m19,samples)
+m19<-MLPE.lmm(m19,fst)
+
+m20<-(StreamSize + Cond + Elev + Slope)
+m20 <- gdistance::transition(m20, transitionFunction=mean, directions=8)
+m20<-commuteDistance(m20,samples)
+m20<-MLPE.lmm(m20,fst)
+
+m21<-(RawAOP + Cond + NLCD + Slope + StreamSize)
+m21 <- gdistance::transition(m21, transitionFunction=mean, directions=8)
+m21<-commuteDistance(m21,samples)
+m21<-MLPE.lmm(m21,fst)
+
+m25<-(Slope)
+m25 <- gdistance::transition(m25, transitionFunction=mean, directions=8)
+m25<-commuteDistance(m25,samples)
+m25<-MLPE.lmm(m25,fst)
+
+m22<-(Slope + RawAOP)
+m22 <- gdistance::transition(m22, transitionFunction=mean, directions=8)
+m22<-commuteDistance(m22,samples)
+m22<-MLPE.lmm(m22,fst)
+
+m23<-(Slope + Cond + Elev)
+m23 <- gdistance::transition(m23, transitionFunction=mean, directions=8)
+m23<-commuteDistance(m23,samples)
+m23<-MLPE.lmm(m23,fst)
+
+m24<-(Slope + Cond + Elev + RawAOP)
+m24 <- gdistance::transition(m24, transitionFunction=mean, directions=8)
+m24<-commuteDistance(m24,samples)
+m24<-MLPE.lmm(m24,fst)
+
+m26<-(Elev)
+m26 <- gdistance::transition(m26, transitionFunction=mean, directions=8)
+m26<-commuteDistance(m26,samples)
+m26<-MLPE.lmm(m26,fst)
+
+m27<-(Elev + RawAOP)
+m27 <- gdistance::transition(m27, transitionFunction=mean, directions=8)
+m27<-commuteDistance(m27,samples)
+m27<-MLPE.lmm(m27,fst)
+
+m28<-(RawAOP + Cond + Elev)
+m28 <- gdistance::transition(m28, transitionFunction=mean, directions=8)
+m28<-commuteDistance(m28,samples)
+m28<-MLPE.lmm(m28,fst)
+
+m29<-(Cond + Elev + RawAOP + NLCD)
+m29 <- gdistance::transition(m29, transitionFunction=mean, directions=8)
+m29<-commuteDistance(m29,samples)
+m29<-MLPE.lmm(m29,fst)
+
+aic<-list(m1,m2,m3,m4,m5,m6,m7,m8,m9,m10,m11,m12,m13,m14,m15,m16,m17,m18,m19,m20,m21,m22,m23,m24,m25,m26,m27,m28,m29)
+aictab(aic)
+#AIC(all,dist,mCulv,mCond,mNLCD,mSS,mSlope,mElev,four,SE,CC,CoN,NoSS,CuNL,SlElNL,m1,m2,m3,m4,m5,m6,m7,m8,m9,m10,m11,m12,m13,m14,m15,m16,m17,m18,m19,m20,m21,m22,m23,m24,m25,m26,m27,m28,m29)
+```
+
+
+
